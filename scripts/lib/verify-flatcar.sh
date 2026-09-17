@@ -5,10 +5,14 @@
 # Verifies a downloaded Flatcar artifact: fetches <url>.DIGESTS and
 # <url>.DIGESTS.asc, confirms the GPG clearsigned signature against the embedded
 # Flatcar signing key, then confirms the artifact's SHA512. Exits non-zero on a
-# GPG or SHA512 mismatch. Skips verification if the metadata is unreachable —
-# unless REQUIRE_VERIFICATION=1, which makes any missing/unverifiable metadata a
-# hard error (release builds use this; local dev keeps the soft default since the
-# CDN may not publish per-file digests for every channel).
+# GPG or SHA512 mismatch.
+#
+# Fail closed by default: if the metadata (.DIGESTS or .DIGESTS.asc) is
+# unreachable the build aborts. A network attacker who can serve a 404 for the
+# digests (or a corrupted artifact) must not be able to silently degrade
+# verification to zero. ALLOW_UNVERIFIED_PXE=1 is an explicit opt-out for the
+# rare local-dev case where the CDN genuinely does not publish per-file digests;
+# unverified builds must be a deliberate choice, never a silent default.
 set -euo pipefail
 
 # Resolve the repo root from this file's location: scripts/lib/verify-flatcar.sh
@@ -17,11 +21,9 @@ _FLATCAR_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ROOT_DIR="$_FLATCAR_LIB_DIR"
 FLATCAR_KEY="$ROOT_DIR/internal/bakery/keys/flatcar-signing.asc"
 
-# When 1, missing DIGESTS / .DIGESTS.asc is a hard error instead of a skipped
-# verification. Release builds set REQUIRE_PXE_VERIFICATION=1 (or pass
-# --require-verification to build-iso.sh); local dev keeps the soft default (see
-# the note above). Do not clobber a value an already-set caller may have chosen.
-REQUIRE_VERIFICATION="${REQUIRE_VERIFICATION:-${REQUIRE_PXE_VERIFICATION:-0}}"
+# ALLOW_UNVERIFIED_PXE=1 is the only opt-out from the fail-closed default (see the
+# header note). Do not clobber a value an already-set caller may have chosen.
+ALLOW_UNVERIFIED_PXE="${ALLOW_UNVERIFIED_PXE:-0}"
 
 # verify_flatcar_file <local_file> <upstream_url> <upstream_name>
 #
@@ -39,15 +41,19 @@ verify_flatcar_file() {
     local digests_file="$tmp_dir/DIGESTS"
     local asc_file="$tmp_dir/DIGESTS.asc"
 
-    # Fetch DIGESTS (soft-fail if unavailable — CDN may not publish per-file digests)
+    # Fetch DIGESTS. Fail closed by default: if the metadata is unreachable the
+    # build aborts so an attacker who can serve a 404 (or a corrupted artifact)
+    # cannot silently degrade verification to zero. ALLOW_UNVERIFIED_PXE=1 is an
+    # explicit opt-out for the rare local-dev case where the CDN does not publish
+    # per-file digests.
     if ! curl -fsSL --max-time 30 -o "$digests_file" "$digests_url" 2>/dev/null; then
         rm -rf "$tmp_dir"
-        if [[ "$REQUIRE_VERIFICATION" == "1" ]]; then
-            echo "error: DIGESTS not available for $upstream_name and --require-verification is set" >&2
-            exit 1
+        if [[ "${ALLOW_UNVERIFIED_PXE}" == "1" ]]; then
+            echo "  ⚠ DIGESTS not available for $upstream_name — ALLOW_UNVERIFIED_PXE set, skipping verification" >&2
+            return 0
         fi
-        echo "  ⚠ DIGESTS not available for $upstream_name — skipping verification" >&2
-        return 0
+        echo "error: DIGESTS not available for $upstream_name — refusing to build with unverified artifacts" >&2
+        exit 1
     fi
 
     # GPG signature verification.
@@ -70,12 +76,15 @@ verify_flatcar_file() {
         # Use the verified (signature-checked) content for the SHA512 lookup.
         digests_file="$verified_digests"
     else
-        if [[ "$REQUIRE_VERIFICATION" == "1" ]]; then
+        # Missing .DIGESTS.asc: fail closed by default so an attacker cannot skip
+        # the GPG gate by 404ing the signature. ALLOW_UNVERIFIED_PXE=1 opts out.
+        if [[ "${ALLOW_UNVERIFIED_PXE}" == "1" ]]; then
+            echo "  ⚠ .DIGESTS.asc unavailable — GPG check skipped for $upstream_name" >&2
+        else
             rm -rf "$tmp_dir"
-            echo "error: .DIGESTS.asc unavailable for $upstream_name and --require-verification is set — refusing to trust unsigned DIGESTS" >&2
+            echo "error: .DIGESTS.asc unavailable for $upstream_name — refusing to trust unsigned DIGESTS" >&2
             exit 1
         fi
-        echo "  ⚠ .DIGESTS.asc unavailable — GPG check skipped for $upstream_name" >&2
     fi
 
     # SHA512 verification against the DIGESTS file (filename-bound, not just hash)

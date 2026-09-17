@@ -9,18 +9,18 @@
 #   Ubuntu:  sudo apt-get install -y xorriso mtools cpio systemd-boot-efi
 #   Fedora:  sudo dnf install -y xorriso mtools cpio systemd-boot-unsigned
 #
-# Usage: ./scripts/build-iso.sh [--channel stable|beta|alpha|lts|edge] [--arch amd64|arm64] [--binary /path/to/knuckle] [--require-verification]
+# Usage: ./scripts/build-iso.sh [--channel stable|beta|alpha|lts|edge] [--arch amd64|arm64] [--binary /path/to/knuckle] [--allow-unverified]
 set -euo pipefail
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
 CHANNEL="stable"
 ARCH="amd64"
 BINARY_OVERRIDE=""
-# When 1, missing DIGESTS / .DIGESTS.asc is a hard error instead of a skipped
-# verification. Release builds set this so ISOs can never ship unverified
-# upstream artifacts; local dev keeps the soft default (CDN may not publish
-# per-file digests for every channel).
-REQUIRE_VERIFICATION="${REQUIRE_PXE_VERIFICATION:-0}"
+# build-iso.sh sources scripts/lib/verify-flatcar.sh, which fails closed by
+# default when Flatcar .DIGESTS / .DIGESTS.asc is unreachable. ALLOW_UNVERIFIED_PXE=1
+# (or --allow-unverified below) is an explicit opt-out for the rare local-dev
+# case where the CDN does not publish per-file digests; unverified builds must be
+# deliberate. The lib owns the gate, so no per-script flag state is needed.
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -30,7 +30,7 @@ while [[ $# -gt 0 ]]; do
         --arch)      ARCH="$2"; shift 2 ;;
         --binary=*)  BINARY_OVERRIDE="${1#--binary=}"; shift ;;
         --binary)    BINARY_OVERRIDE="$2"; shift 2 ;;
-        --require-verification) export REQUIRE_VERIFICATION="1"; shift ;;
+        --allow-unverified) export ALLOW_UNVERIFIED_PXE="1"; shift ;;
         stable|beta|alpha|lts|edge) CHANNEL="$1"; shift ;;
         *) echo "Unknown argument: $1" >&2; exit 1 ;;
     esac

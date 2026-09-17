@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # Tests for scripts/lib/verify-flatcar.sh: verify_flatcar_file DIGESTS fetch,
-# REQUIRE_VERIFICATION hard-fail gates, GPG clearsign verification, and the
-# filename-bound SHA512 lookup.
+# the fail-closed-by-default gate with ALLOW_UNVERIFIED_PXE opt-out, GPG
+# clearsign verification, and the filename-bound SHA512 lookup.
 #
 # Requires: bats-core (https://github.com/bats-core/bats-core)
 #
@@ -104,47 +104,43 @@ run_verify() {
     "$LIB" "$ARTIFACT" "$URL" "$NAME"
 }
 
-# ── DIGESTS availability / REQUIRE_VERIFICATION gate ─────────────────────────
+# ── DIGESTS availability / fail-closed default + ALLOW_UNVERIFIED_PXE opt-out ──
 
-@test "missing DIGESTS is a soft skip by default" {
-  run_verify
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"DIGESTS not available"* ]]
-  [[ "$output" == *"skipping verification"* ]]
-}
+# The finding (knuckle#880): verify_flatcar_file previously failed open — a
+# missing .DIGESTS/.DIGESTS.asc degraded the build to zero integrity. The fix
+# makes the DEFAULT fail closed; ALLOW_UNVERIFIED_PXE=1 is the only way to opt
+# out, so unverified builds are deliberate, never a silent default.
 
-@test "missing DIGESTS is fatal under REQUIRE_VERIFICATION=1" {
-  export REQUIRE_VERIFICATION=1
+@test "missing DIGESTS is fatal by default" {
   run_verify
   [ "$status" -ne 0 ]
-  [[ "$output" == *"--require-verification is set"* ]]
+  [[ "$output" == *"refusing to build with unverified artifacts"* ]]
 }
 
-@test "REQUIRE_PXE_VERIFICATION=1 also arms the hard-fail gate" {
-  export REQUIRE_PXE_VERIFICATION=1
-  run_verify
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"--require-verification is set"* ]]
-}
-
-@test "REQUIRE_VERIFICATION wins over REQUIRE_PXE_VERIFICATION" {
-  export REQUIRE_VERIFICATION=0
-  export REQUIRE_PXE_VERIFICATION=1
+@test "missing DIGESTS is fatal unless ALLOW_UNVERIFIED_PXE=1" {
+  export ALLOW_UNVERIFIED_PXE=1
   run_verify
   [ "$status" -eq 0 ]
-  [[ "$output" == *"skipping verification"* ]]
+  [[ "$output" == *"ALLOW_UNVERIFIED_PXE set, skipping verification"* ]]
 }
 
-@test "missing .DIGESTS.asc is fatal under REQUIRE_VERIFICATION=1" {
+@test "ALLOW_UNVERIFIED_PXE=0 keeps the default fail-closed" {
+  export ALLOW_UNVERIFIED_PXE=0
+  run_verify
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"refusing to build with unverified artifacts"* ]]
+}
+
+@test "missing .DIGESTS.asc is fatal by default" {
   digests_body "goodhash" "$NAME" | serve DIGESTS
-  export REQUIRE_VERIFICATION=1
   run_verify
   [ "$status" -ne 0 ]
   [[ "$output" == *"refusing to trust unsigned DIGESTS"* ]]
 }
 
-@test "missing .DIGESTS.asc downgrades to unsigned DIGESTS by default" {
+@test "missing .DIGESTS.asc downgrades to unsigned DIGESTS only under ALLOW_UNVERIFIED_PXE=1" {
   digests_body "goodhash" "$NAME" | serve DIGESTS
+  export ALLOW_UNVERIFIED_PXE=1
   export STUB_ACTUAL_HASH=goodhash
   run_verify
   [ "$status" -eq 0 ]
