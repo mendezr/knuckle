@@ -191,5 +191,15 @@ func (m *Model) viewWithForm() string {
 		b.WriteString("\n  ⣾ Fetching SSH keys from GitHub...\n")
 	}
 
+	// huh's own footer only advertises "shift+tab back", which merely moves
+	// between fields inside this form and does nothing once you're on the
+	// form's very first field — and on some consoles/keyboards shift+tab
+	// isn't delivered as a distinct key at all, making it look like backward
+	// navigation is broken (see knuckle#815). esc is always wired up (see
+	// tui.go) to leave the form and return to the previous wizard step, so
+	// make sure users can discover it here too.
+	b.WriteString("\n")
+	b.WriteString(helpStyle.Render("esc back a step • ctrl+c quit"))
+
 	return b.String()
 }

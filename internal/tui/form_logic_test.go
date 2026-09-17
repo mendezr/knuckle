@@ -227,3 +227,19 @@ func TestViewWithForm_ShowsErrorAndFetchingIndicators(t *testing.T) {
 		t.Fatalf("viewWithForm() missing fetching indicator: %q", out)
 	}
 }
+
+// Regression test for knuckle#815: shift+tab is huh's only field-back key,
+// and it silently no-ops at the form's first field, so form steps must
+// surface the always-working "esc back a step" escape hatch directly.
+func TestViewWithForm_AdvertisesEscBackToPreviousStep(t *testing.T) {
+	w := newTestWizard()
+	w.State.CurrentStep = model.StepNetwork
+	m := New(w)
+	m.initForm()
+
+	out := m.viewWithForm()
+
+	if !strings.Contains(out, "esc back a step") {
+		t.Fatalf("viewWithForm() should advertise the esc-back escape hatch, got: %q", out)
+	}
+}
