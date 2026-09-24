@@ -765,6 +765,8 @@ vm-e2e:
 #   - Asserts zincati.service is active and update-engine.service is absent
 # Requires: KVM, internet access (~1GB FCOS image download during first run),
 # coreos-installer on the host (just tools-fcos). Runs independently of vm-e2e.
+#
+# Automated FCOS: headless install → boot → verify zincati
 vm-e2e-fcos:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -906,26 +908,35 @@ vm-e2e-fcos:
     [ -n "$FCOS_VER" ] && echo "  ✓ Fedora version: $FCOS_VER"
 
     # zincati must be present and active (FCOS uses zincati, not update-engine)
-    if $E2E_SSH "systemctl is-enabled zincati.service" 2>/dev/null | grep -q "enabled"; then
+    ZINCATI_STATUS=$($E2E_SSH "systemctl is-enabled zincati.service" 2>&1) || {
+        echo "❌ zincati.service not enabled: $ZINCATI_STATUS"
+        exit 1
+    }
+    if echo "$ZINCATI_STATUS" | grep -q "enabled"; then
         echo "  ✓ zincati.service enabled"
     else
-        echo "  ⚠ zincati.service not reported enabled: $($E2E_SSH 'systemctl is-enabled zincati.service 2>&1' 2>/dev/null || true)"
+        echo "❌ zincati.service not reported enabled: $ZINCATI_STATUS"
+        exit 1
     fi
 
     # update-engine.service must NOT exist on FCOS
-    if $E2E_SSH "systemctl list-unit-files update-engine.service --no-legend 2>/dev/null | grep -q ." 2>/dev/null; then
-        echo "❌ update-engine.service unexpectedly present on FCOS"
+    UPDATE_ENGINE_UNITS=$($E2E_SSH "systemctl list-unit-files update-engine.service --no-legend 2>&1") \
+        || { echo "❌ SSH check for update-engine.service failed: $UPDATE_ENGINE_UNITS"; exit 1; }
+    if echo "$UPDATE_ENGINE_UNITS" | grep -q .; then
+        echo "❌ update-engine.service unexpectedly present on FCOS: $UPDATE_ENGINE_UNITS"
         exit 1
     else
         echo "  ✓ update-engine.service absent (Flatcar-specific, correct on FCOS)"
     fi
 
     # Verify the core user has a privilege group (sudo/wheel) as configured
-    CORE_GROUPS=$($E2E_SSH "id -nG core" 2>/dev/null) || true
+    CORE_GROUPS=$($E2E_SSH "id -nG core" 2>&1) \
+        || { echo "❌ failed to query core user groups: $CORE_GROUPS"; exit 1; }
     if echo "$CORE_GROUPS" | grep -q "wheel\|sudo"; then
         echo "  ✓ core user has privilege group: $CORE_GROUPS"
     else
-        echo "  ✓ core user groups: $CORE_GROUPS"
+        echo "❌ core user missing privilege group (expected wheel or sudo): $CORE_GROUPS"
+        exit 1
     fi
 
     echo ""
@@ -1481,9 +1492,10 @@ _ensure-fcos-base: check-fcos-tools
             --stream stable \
             --platform qemu \
             --format qcow2 \
+            --decompress \
             --architecture "$COREOS_ARCH" \
             --directory "$DL_DIR"
-        IMG="$(find "$DL_DIR" -name '*.qcow2' -o -name '*.qcow2.xz' | head -1)"
+        IMG="$(ls "$DL_DIR"/*.qcow2 2>/dev/null | head -1)"
         if [[ -z "$IMG" ]]; then
             echo "coreos-installer download produced no qcow2 image" >&2; exit 1
         fi
