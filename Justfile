@@ -814,9 +814,11 @@ vm-e2e-fcos:
     E2E_QEMU_ARGS=(-m 4096 -smp 2)
     if [[ "{{KNUCKLE_ARCH}}" == "arm64" ]]; then
         E2E_QEMU_ARGS+=(-M virt -cpu cortex-a57)
+        E2E_AAVMF=""
         for candidate in /usr/share/AAVMF/AAVMF_CODE.fd /usr/share/qemu-efi-aarch64/QEMU_EFI.fd; do
-            [ -f "$candidate" ] && E2E_QEMU_ARGS+=(-drive "if=pflash,format=raw,readonly=on,file=$candidate") && break
+            [ -f "$candidate" ] && E2E_AAVMF="$candidate" && break
         done
+        [ -n "$E2E_AAVMF" ] && E2E_QEMU_ARGS+=(-drive "if=pflash,format=raw,readonly=on,file=$E2E_AAVMF")
     else
         E2E_QEMU_ARGS+=(-enable-kvm)
     fi
@@ -873,6 +875,7 @@ vm-e2e-fcos:
     E2E_QEMU_ARGS2=(-m 2048 -smp 2)
     if [[ "{{KNUCKLE_ARCH}}" == "arm64" ]]; then
         E2E_QEMU_ARGS2+=(-M virt -cpu cortex-a57)
+        [ -n "${E2E_AAVMF:-}" ] && E2E_QEMU_ARGS2+=(-drive "if=pflash,format=raw,readonly=on,file=$E2E_AAVMF")
     else
         E2E_QEMU_ARGS2+=(-enable-kvm)
     fi
